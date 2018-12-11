@@ -1,0 +1,332 @@
+##--Read here first--##
+#This code is a paper I published in BMC Medicine (I will able this with link as soon as it is published.
+#The paper quantified and then ranked the between-practice variability in test use. We used a large electronic health record in the UK
+#cont. the Clinical Practice Research Datalink (CPRD).
+#This code contains the data management and the model (a Poisson regression model) for one of the 44 tests we studied; the chest x-ray 
+
+
+#######################################----------------------------------------------------------------------------------------################
+#######################################------------------Chest X-ray Between_practice_variation------------------------------------################
+#######################################----------------------------------------------------------------------------------------################
+
+
+#####################---Steps---######################
+####1. Numerator: 
+###1.1: Import specific test and restrict to 2015/16 QOF year
+###1.2: Merge with person years file to generate for each test: patid, age, gender and pracid (at the same time create and save a 2015/16 person years file)
+###1.3: Group specific tests into ~725 dataframes, one for each pracid
+
+####2. Denominator
+###2.1: Import person years file restricted to 2015/16
+###2.2: Create denominator stratified into pracid
+
+####3. Crude rates
+###3.1 Import numerator and denominator files
+###3.2 Create crude rates
+###3.3 Plot: X-axis Person years, y-axis: rate, dots = 725 practices
+
+####4. Standard deviation, mean and CoV
+####4.1 Calculate std dev
+####4.2 Calculate mean
+####4.3 Calculate CoV
+
+####5. Adjusted rates
+####5.1 Import numerator  
+####5.2 Import denominator and merge with person years
+####5.3 Calculate proportion of female for each region
+####5.4 Calculate the proportion of patients >65/age groups in each region
+####5.5 Add IMD for each practice
+
+####6. Poissoning model: Standard deviation, mean and CoV (of Poisson)
+####6.1 Calculate std dev
+####6.2 Calculate mean
+####6.3 Calculate CoV 
+#################################################################################################################################################################################################################
+############################################################################-------------------1. Numerator-------------------###################################################################################
+#################################################################################################################################################################################################################
+
+###########################################################################----------------------1.1 Import specific test----------------------################################################################################
+library(dplyr)
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+
+test <- readRDS("chest_xray_combined.rds")
+
+#Make new column with corresponding QOF year
+years <- 2000:2016
+
+test <- test %>%
+  mutate(FY = cut(as.Date(event_date, format = '%Y-%m-%d'),
+                  breaks = as.Date(paste(years, "-04-01", sep="")),
+                  labels = paste("FY", years[-length(years)],sep=" ")))
+
+#Check if any NA values for FY, if so, Exclude tests outside 2000/1 - 2015/16
+sum(is.na(test$FY))
+
+#Restrict to QOF year "FY 2015"
+test <- test[grepl("FY 2015", test$FY),]
+
+#Sum the number of tests for QOF 2015
+test$FY <- as.character(test$FY)
+test <- test %>% 
+  group_by(patid) %>%
+  summarise(test_2015 = sum(FY == "FY 2015"))
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/CXR")
+
+#Write new file
+saveRDS(test, file = "chest_xray_tests_2015.rds")
+
+###########################################################################----------------------1.2 Merge with person years file----------------------################################################################################
+library(dplyr)
+
+#Import specific test
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/CXR")
+
+tests_per_year <- readRDS("chest_xray_tests_2015.rds")
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Person Years.RDS")
+
+person_years <- readRDS("person_years.rds")
+
+#Merge test dF into Person Years dF
+test_person_years <- merge(tests_per_year, person_years, by="patid")
+
+#Use Dplyr to generate number per practice
+No_per_practice <- test_person_years %>%
+  group_by(pracid) %>%
+  summarise(n = sum(test_2015))
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/CXR")
+write.csv(No_per_practice, file = "CXR_numerator.csv")
+
+
+
+#IGNORE: Can also use Loop to create dataframe for each practice (pracid)
+#df <- data.frame(nrow = nrow(test_person_years), ncol = 2)
+#pracum <- sort(unique(test_person_years$pracid))
+
+#for (i in 1:nrow(test_person_years)) {
+  #p1 <- filter(test_person_years, pracid == pracum[i])
+  #p2 <- sum(p1$test_2015)
+  #print(p2)
+  #df[i,] <- c(p2, pracum[i])
+#}
+
+
+#################################################################################################################################################################################################################
+############################################################################-------------------2. Denominator-------------------###################################################################################
+#################################################################################################################################################################################################################
+#Only do once
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Person Years.RDS")
+
+person_years <- readRDS("person_years.rds")
+
+#Remove practices from region 4 (region data not used in 2015/16)
+person_years <- filter(person_years, region != 4)
+
+library(dplyr)
+PY_per_practice_total <- person_years %>%
+  group_by(pracid) %>%
+  summarise(PY = sum(years_contrib_2015))
+
+#Remove practices that didn't contribute any patients in 2015
+PY_per_practice_total1 <- filter(PY_per_practice_total, PY != 0)
+
+#Median number of patients per practice
+median(PY_per_practice_total1$PY)
+Q3 <- quantile(PY_per_practice_total1$PY, 0.75)
+Q1 <- quantile(PY_per_practice_total1$PY, 0.25)
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/Person_years")
+
+write.csv(PY_per_practice_total1, file = "Person_years_total1.csv")
+
+
+#################################################################################################################################################################################################################
+############################################################################-------------------3. Crude rates per 10,000 person years-------------------###################################################################################
+#################################################################################################################################################################################################################
+cr <- merge(PY_per_practice_total1, No_per_practice, by = "pracid", all = TRUE) #all = TRUE means practices with no CXR will still be included in dataframe. 
+colnames(cr) <- (c("pracid", "PY", "No_tests"))
+
+#Convert NAs (in the numerator) into 0 (this means no tests)
+cr[is.na(cr)] <- 0
+cr$rates <- (cr$No_tests/cr$PY)*10000 #per 10,000 person-years
+cr$rates1 <- (cr$No_tests/cr$PY) #per 1 person year
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/CXR")
+write.csv(cr, file = "CXR.csv") #crude rates dataframe
+
+library(ggplot2)
+ggplot() + geom_point(aes(x = cr$PY, y = cr$rates)) #+ ylim(c(0,5)) #Quick visual inspection, don't saved plot
+
+#################################################################################################################################################################################################################
+############################################################################-------------------4. Standard deviation, mean and CoV-------------------###################################################################################
+#################################################################################################################################################################################################################
+#Standard deviation
+sd <- sd(c(cr$rates)) #per 10,000
+
+#Mean per 1 person-year
+mean <- mean(cr$rates) #per 10,000
+
+#Co-efficient of variation
+CoV <- sd/mean
+
+#################################################################################################################################################################################################################
+############################################################################-------------------5. Adjusted rates-------------------###################################################################################
+#################################################################################################################################################################################################################
+
+
+###########################################################################----------------------1.1 Calculate proportion female----------------------################################################################################
+#Only do this once
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Person Years.RDS")
+
+person_years <- readRDS("person_years.rds")
+
+#Remove practices from region 4
+person_years <- filter(person_years, region != 4)
+
+#Read in total number of person years per practice
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/Person_years")
+
+PY_per_practice_total1 <- read.csv("Person_years_total1.csv") #Total number of person-years for each practice
+
+
+#Generate the percentage of person-years that was female
+#Calculate total female for each practice
+Female <- filter(person_years, gender == 2)
+
+library(dplyr)
+female_per_practice <- Female %>%
+  group_by(pracid) %>%
+  summarise(PY_F = sum(years_contrib_2015))
+
+
+female_1 <- merge(female_per_practice, PY_per_practice_total1, by = "pracid") #Don't need 'all = TRUE' because PY_per_practice_total1 has already removed the practices that didn't contribute patients in year 2015
+
+female_1$pro_f <- female_1$PY_F/female_1$PY
+
+female_1 <- female_1[,c(1,2,4,5)]
+
+quantile(female_1$pro_f, 0.25)
+quantile(female_1$pro_f, 0.75)
+
+#Save dataframe with proportion female in it for future reference
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/Covariates/Sex")
+write.csv(female_1, file = "Proportion_female_per_practice.csv")
+
+#Merge Proportion female with crude rates (for Poisson regression)
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/CXR")
+cr <- read.csv("CXR.csv")
+
+cr_f <- merge(cr, female_1, by = "pracid")
+cr_f <- cr_f[,c(1,2,3,4,5,6,8)]
+
+###########################################################################----------------------1.2 Age groups for each practice----------------------################################################################################
+#Read in total number of person years per practice
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/Person_years")
+PY_per_practice_total1 <- read.csv("Person_years_total1.csv") #Total number of person-years for each practice in 2015
+
+#Read in person-years dataframe again to determine total PY for each age bracket 
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Person Years.RDS")
+person_years <- readRDS("person_years.rds")
+#Remove practices from region 4
+person_years <- filter(person_years, region != 4)
+
+
+##############---------Median ages per practice--------#############
+#Determine the median age for each practice for year 2015 
+person_years_2015 <- person_years[,c(1,3,4,38)]
+person_years_2015 <- person_years_2015[complete.cases(person_years_2015$age_in_2015),] #remove NA values from column
+
+#Median age per practice
+library(dplyr)
+median_age_per_practice <- person_years_2015 %>%
+  group_by(pracid) %>%
+  summarise(median_age = median(age_in_2015))
+
+#Save df 
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/Covariates/Age")
+write.csv(median_age_per_practice, file = "Median_age_per_practice.csv")
+
+#Merge with other dataframe
+cr_f_age <- merge(cr_f, median_age_per_practice, by = "pracid")
+
+###########################################################################----------------------1.3 Add IMD for each practice----------------------################################################################################
+#Read in Practice IMD file
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation")
+IMD <- read.delim("practice_imd_16_085R.txt")
+
+#Create new column with no NAs (e.g. capture the respective IMD from respective year for each practice)
+list_IMD <- IMD[,c(1,3:6)]
+list_IMD <- cbind.data.frame(pracid=list_IMD$pracid, IMD = rowSums(list_IMD[,-1], na.rm = TRUE)) 
+
+median(list_IMD$IMD)
+quantile(list_IMD$IMD, 0.25)
+quantile(list_IMD$IMD, 0.75)
+
+cr_f_age_IMD <- merge(cr_f_age, list_IMD, by = "pracid") #This is the dataframe to use in the model
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/CXR")
+write.csv(cr_f_age_IMD, file = "CXR_for_model1.csv")
+
+
+#################################################################################################################################################################################################################
+############################################################################-------------------6. Possion model: Standard deviation, mean and CoV-------------------###################################################################################
+#################################################################################################################################################################################################################
+#Import data frame
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/CXR")
+CXR <- read.csv("CXR_for_model1.csv")
+
+mod1 <- glm(No_tests ~ as.factor(IMD) + pro_f + median_age, 
+            family = poisson, offset = log(PY.x), data = CXR) 
+
+CXR$fitted_tests <- fitted(mod1)
+CXR$fitted_rate1 <- CXR$fitted_tests/CXR$PY.x
+
+#Save dataframe with adjusted rates
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Geographical variation/POST_STATS_current/Analysis/CXR")
+write.csv(CXR, file = "CXR_with_adjusted_rates1.csv")
+
+mean_adjusted <- mean(CXR$fitted_rate1)
+sd_adjusted <- sd(CXR$fitted_rate1)
+CoV_adjusted <- sd_adjusted/mean_adjusted
+
+write.csv(CoV_adjusted, file = "CXR_CoV1.csv")
+
+#Manual confidence intervals for adjusted via (http://influentialpoints.com/Training/confidence_interval-of-coefficient_of_variation.htm) #Note that the confidence intervals corrected for bias give the same results
+SE_CV <- CoV_adjusted/(sqrt(2*nrow(CXR)))
+a <- 0.05
+t <- (1-(a/2))
+U_CI_CV <- CoV_adjusted + t * SE_CV 
+L_CI_CV <- CoV_adjusted - t * SE_CV
+U_CI_CV
+L_CI_CV
+
+#Unadjusted
+mean_un <- mean(CXR$rates1)
+sd_un <- sd(CXR$rates1)
+CoV_un <- sd_un/mean_un
+
+SE_CV_un <- CoV_un/(sqrt(2*nrow(CXR)))
+a <- 0.05
+t <- (1-(a/2))
+U_CI_CV_un <- CoV_un + t * SE_CV 
+L_CI_CV_un <- CoV_un - t * SE_CV
+U_CI_CV_un
+L_CI_CV_un
+
+CoV_un - CoV_adjusted
+
+#Plot both together
+library(ggplot2)
+ggplot() + geom_point(aes(x=CXR$PY.x, y = CXR$rates1, colour = "blue")) + geom_point(aes(CXR$PY.x, y = CXR$fitted_rate1, colour = "red")) + ggtitle("Chest x-ray") + theme(plot.title = element_text(hjust = 0.5)) + 
+  xlab("Person-Years") + ylab("Rates per person-year") + 
+  scale_colour_manual(name = "Rates", 
+                      labels = c("Unadjusted", "Adjusted"), 
+                      values = c("coral2", "steelblue2")) + scale_shape_manual(name = "Test type",
+                                                                               labels = c("Imaging", "Laboratory", "Miscellaneous"),
+                                                                               values = c(19, 18, 17)) #Save as width 650, height 850
+
