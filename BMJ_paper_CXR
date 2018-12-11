@@ -1,0 +1,491 @@
+###READ HERE FIRST###
+#This is the code for my analysis of this paper: O'Sullivan et al Temporal trends in use of tests in UK primary care, 2000-15: 
+# cont. retrospective analysis of 250 million tests BMJ 2018; 363 doi: https://doi.org/10.1136/bmj.k4666
+#This code is mostly the data management, I conducted the statistical analysis (joinpoint regression) in a separate software.
+#Also note that this is the code for one test, I have separate code for all the tests and then more code for the total test use analysis (figure 1)
+
+
+################----------------------------------------------------------------------------------------################
+################-----------------------------------------Chest X-ray------------------------------------################
+################----------------------------------------------------------------------------------------################
+
+#######Overarching steps#######
+##: Step 1: Numerator (TESTS)
+##: Step 2: Denominator (Person years: only need to do this once, done)
+##: Step 3: Age and Sex adjusted rates
+##: Step 4: Standard errors for adjusted rates
+
+
+###############################################################################################################################################################################################################
+###################################################-------------------1. Numerator-------------------############################################################################################################
+###############################################################################################################################################################################################################
+
+#####Steps#####
+####ONLY DO STEP 1 ONCE#####
+###1. Create new dataframe with one line per patient per year
+##1.1 Make new column with corresponding QOF year
+##1.2 Sum the number of tests per QOF year
+##1.3 Write new CSV file
+
+###2.Merge tests dF to person years dataframe to calculate the age and gender specific number of tests (age and gender data not in test specific file) 
+##2.1 Read in person years and new test CSV file (from 1.3) 
+##2.2 Divide person years dF into gender
+##2.3 Merge test dF from 1.3 into Person Years dF 
+##2.4 Assign age intervals to dataframe [in loop]
+##2.5 Sum number of tests for each age, sex interval
+##2.6 Write new CSV file
+##2.7 Repeat for other gender
+
+
+###################################################-------------------Step 1: New test dF with one line per patient-------------------############################################################################################################
+#This step is already done for total test data file
+library(dplyr)
+#library(readstata13)
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+
+#tests <- read.dta13("chest_xray_combined.dta")
+
+#tests <- saveRDS(tests, file = "chest_xray_combined.rds")
+
+test <- readRDS("chest_xray_combined.rds")
+
+##1.1 Make new column with corresponding QOF year
+years <- 2000:2016
+
+test <- test %>%
+  mutate(FY = cut(as.Date(event_date, format = '%Y-%m-%d'),
+                  breaks = as.Date(paste(years, "-04-01", sep="")),
+                  labels = paste("FY", years[-length(years)],sep=" ")))
+
+#Check if any NA values for FY, if so, Exclude tests outside 2000/1 - 2015/16
+sum(is.na(test$FY))
+#test <- test[complete.cases(test[,14]),]
+
+##1.2 Sum the number of tests per QOF year
+test$FY <- as.character(test$FY)
+test <- test %>% 
+  group_by(patid) %>%
+  summarise(test_2000 = sum(FY == "FY 2000"), test_2001 = sum(FY == "FY 2001"), test_2002 = sum(FY == "FY 2002"), test_2003 = sum(FY == "FY 2003"),
+            test_2004 = sum(FY == "FY 2004"), test_2005 = sum(FY == "FY 2005"), test_2006 = sum(FY == "FY 2006"), test_2007 = sum(FY == "FY 2007"),
+            test_2008 = sum(FY == "FY 2008"), test_2009 = sum(FY == "FY 2009"), test_2010 = sum(FY == "FY 2010"), test_2011 = sum(FY == "FY 2011"),
+            test_2012 = sum(FY == "FY 2012"), test_2013 = sum(FY == "FY 2013"), test_2014 = sum(FY == "FY 2014"), test_2015 = sum(FY == "FY 2015"))
+
+##1.3 Write new file
+saveRDS(test, file = "chest_xray_tests_per_FY.rds")
+
+
+###################################################-------------------Step 2: Merge tests dF to person years dataframe to calculate the age and gender specific number of tests-------------------############################################################################################################
+##2.1 Read in person years and test file (from step 1)
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+
+tests_per_year <- readRDS("chest_xray_tests_per_FY.rds")
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Person Years.RDS")
+
+person_years <- readRDS("person_years.rds")
+
+##################---Gender 2---#################################
+##2.2 Divide person years dF into gender
+person_years <- filter(person_years, gender == 2)
+
+##2.3 Merge test dF from 1.3 into Person Years dF
+test_person_years <- merge(tests_per_year, person_years, by="patid")
+
+##2.4 Assign age intervals to dataframe
+#Create dataframe with age in year and number of tests for that year
+test_person_years2000 <- test_person_years[ , c("test_2000", "age_in_2000")]
+
+breakset <- c(0, 5, 15, 25, 45, 65, 75, 85, 500)
+
+#Assign age cuts/intervals  
+test_person_years2000$agecut <- cut(test_person_years2000$age_in_2000, breakset, include.lowest = TRUE, right = FALSE)
+
+#Calculate total HbA1c per age group for 2000
+tapply(test_person_years2000$test_2000, test_person_years2000$agecut, sum)
+
+#Create matrix with appropriate columns and rows to be filled by the for loop
+#years <- c("2000/1", "2001/2", "2002/3", "2003/4", "2004/5", "2005/6", "2006/7", "2007/8", "2008/9", "2009/10", "2010/11", "2012/13","2013/14", "2014/15", "2015/16")
+years <- seq(2000,2015)
+breaknames <- c("0-4", "5-14", "15-24", "25-44", "45-64", "65-74", "75-84", "85+")
+
+test_matrix <- matrix(nrow=length(breaknames), ncol=length(years))
+colnames(test_matrix) <- years
+rownames(test_matrix) <- breaknames
+
+
+for (indx in 1:length(years)) {
+  
+  year <- years[indx]
+  year_str <- as.character(year)
+  
+  test_year <- paste("test_", year_str, sep="")
+  age_in_year <- paste("age_in_", year_str, sep="")
+  
+  test_in_year_years <- test_person_years[ , c(test_year, age_in_year)]
+  test_in_year_years$agecut <- cut(test_in_year_years[ , age_in_year], breakset, include.lowest = TRUE, right = FALSE)
+  final_test_person_year <- tapply(test_in_year_years[ , test_year], test_in_year_years[ , "agecut"], sum)
+  
+  test_matrix[ , indx] <- final_test_person_year
+  
+}
+
+##2.6 Write new file
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+
+write.csv(test_matrix, file = "Chest_xray_numerator_gender_2.csv")
+
+##################---Gender 1---#################################
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+
+tests_per_year <- readRDS("Chest_xray_tests_per_FY.rds")
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Person Years.RDS")
+
+person_years <- readRDS("person_years.rds")
+
+##################---Gender 1---#################################
+##2.2 Divide person years dF into gender
+person_years <- filter(person_years, gender == 1)
+
+##2.3 Merge test dF from 1.3 into Person Years dF
+test_person_years <- merge(tests_per_year, person_years, by="patid")
+
+##2.4 Assign age intervals to dataframe
+#Create dataframe with age in year and number of tests for that year
+test_person_years2000 <- test_person_years[ , c("test_2000", "age_in_2000")]
+
+breakset <- c(0, 5, 15, 25, 45, 65, 75, 85, 500)
+#Assign age cuts/intervals  
+test_person_years2000$agecut <- cut(test_person_years2000$age_in_2000, breakset, include.lowest = TRUE, right = FALSE)
+
+#Calculate total HbA1c per age group for 2000
+tapply(test_person_years2000$test_2000, test_person_years2000$agecut, sum)
+
+#Create matrix with appropriate columns and rows to be filled by the for loop
+#years <- c("2000/1", "2001/2", "2002/3", "2003/4", "2004/5", "2005/6", "2006/7", "2007/8", "2008/9", "2009/10", "2010/11", "2012/13","2013/14", "2014/15", "2015/16")
+years <- seq(2000,2015)
+breaknames <- c("0-4", "5-14", "15-24", "25-44", "45-64", "65-74", "75-84", "85+")
+
+test_matrix <- matrix(nrow=length(breaknames), ncol=length(years))
+colnames(test_matrix) <- years
+rownames(test_matrix) <- breaknames
+
+
+for (indx in 1:length(years)) {
+  
+  year <- years[indx]
+  year_str <- as.character(year)
+  
+  test_year <- paste("test_", year_str, sep="")
+  age_in_year <- paste("age_in_", year_str, sep="")
+  
+  test_in_year_years <- test_person_years[ , c(test_year, age_in_year)]
+  test_in_year_years$agecut <- cut(test_in_year_years[ , age_in_year], breakset, include.lowest = TRUE, right = FALSE)
+  final_test_person_year <- tapply(test_in_year_years[ , test_year], test_in_year_years[ , "agecut"], sum)
+  
+  test_matrix[ , indx] <- final_test_person_year
+  
+}
+
+##2.6 Write new file
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+
+write.csv(test_matrix, file = "Chest_xray_numerator_gender_1.csv")
+
+
+###############################################################################################################################################################################################################
+###################################################-------------------2. Denominator-------------------############################################################################################################
+###############################################################################################################################################################################################################
+##Read in person years data for each gender (denominator)
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Person Years.RDS/Person years New ages")
+
+PY_m <-read.csv("person_years_new_age_gender_1.csv")
+PY_f <-read.csv("person_years_new_age_gender_2.csv")
+
+
+###############################################################################################################################################################################################################
+###################################################-------------------3. Age and Sex adjusted rates-------------------############################################################################################################
+###############################################################################################################################################################################################################
+
+####Steps
+###1. Read in data
+##1.1 Read in test data
+##1.2 Read in person years data for each gender
+##1.3 Read in 2015 UK Standard population data
+
+###2. Loop to create weight per standard population 
+
+###3. Create crude rates dataframe
+
+###4. Create adjusted rate: weight x crude rates
+
+###################################################-------------------1. Read in data-------------------############################################################################################################
+##1.1 Read in test data (numerator)
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+
+male_test <- read.csv("Chest_xray_numerator_gender_1.csv")
+female_test <- read.csv("Chest_xray_numerator_gender_2.csv")
+
+##1.2 Read in person years data for each gender (denominator)
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Person Years.RDS/Person years New ages")
+
+PY_m <-read.csv("person_years_new_age_gender_1.csv")
+PY_f <-read.csv("person_years_new_age_gender_2.csv")
+
+##1.3 Read in 2015 UK Standard population data
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data/UK 2015 pop estimates")
+
+standard <- read.csv("2015_UK_pop_standard.csv")
+
+#Clean dataframe
+standard$Male <- gsub(',', '', standard$Male)
+standard$Female <- gsub(',', '', standard$Female)
+standard$Male <- as.numeric(standard$Male)
+standard$Female <- as.numeric(standard$Female)
+Total_2015_pop <- sum(standard$Male)+sum(standard$Female)
+
+#Make Standard population new age cuts
+standard <- standard[,2:3]
+standard[20,] <- standard[2,] + standard[3,] #5-14
+standard[21,] <- standard[4,] + standard[5,] #15-24
+standard[22,] <- standard[6,] + standard[7,] + standard[8,] + standard[9,] #25-44
+standard[23,] <- standard[10,] + standard[11,] + standard[12,] + standard[13,] #45-64
+standard[24,] <- standard[14,] + standard[15,] #65-74
+standard[25,] <- standard[16,] + standard[17,] #75-84
+standard[26,] <- standard[18,] + standard[19,] #85+
+
+standard <- as.data.frame(standard[c(1,20:26),])
+breaknames_new <- c("0-4", "5-14", "15-24", "25-44", "45-64", "65-74", "75-84", "85+")
+
+standard$age_groups <- breaknames_new
+standard <- standard[,c(3,1:2)]
+
+###################################################-------------------2. Loop to create weight per standard population-------------------############################################################################################################
+weightF_all <- matrix(nrow = nrow(standard), ncol = 1)
+weightM_all <- matrix(nrow = nrow(standard), ncol = 1)
+
+for (i in 1:nrow(standard)) {
+  print(i)
+  weightM <- (standard[i,2])/(Total_2015_pop)
+  print(weightM)
+  weightM_all[i,] <- weightM
+  weightF <- (standard[i,3]/(Total_2015_pop))
+  print(weightF)
+  weightF_all[i,] <- weightF
+}
+
+#Clean weight dataframes
+weightF_all <- as.data.frame(weightF_all)
+weightF_all$age <- standard$age_groups 
+weightF_all <- weightF_all[,c(2,1)]
+
+weightM_all <- as.data.frame(weightM_all)
+weightM_all$age <- standard$age_groups
+weightM_all <- weightM_all[,c(2,1)]
+
+
+###################################################-------------------3.Create crude rates dataframe-------------------############################################################################################################
+crude_rate_m <- matrix(nrow=nrow(male_test), ncol = ncol(male_test))
+crude_rate_f <- matrix(nrow=nrow(male_test), ncol = ncol(male_test))
+
+#Loop for crude rates per 100,000
+for (i in 2:ncol(male_test)) {
+  crude_m <- (male_test[,i]/PY_m[,i])*100000
+  print(crude_m)
+  crude_f <- (female_test[,i]/PY_f[,i])*100000
+  print(crude_f)
+  crude_rate_m[,i] <- crude_m
+  crude_rate_f[,i] <- crude_f
+}
+
+crude_rate_m <- as.data.frame(crude_rate_m)
+crude_rate_m$V1 <- standard$age_groups
+crude_rate_f <- as.data.frame(crude_rate_f)
+crude_rate_f$V1 <- standard$age_groups
+
+years <- seq(2000,2015)
+colnames(crude_rate_m) <- c("age", years)
+colnames(crude_rate_f)<- c("age", years)
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+
+write.csv(crude_rate_f, file = "Chest_X_ray_crude_rate_f.csv" )
+write.csv(crude_rate_m, file = "Chest_x_ray_crude_rate_m.csv" )
+
+###################################################-------------------4. Create adjusted rate: weight x crude rates-------------------############################################################################################################
+#Adjusted female
+adjusted_f <- crude_rate_f[,2:ncol(crude_rate_f)] * weightF_all$V1
+adjusted_f$age <- crude_rate_f$age
+adjusted_f <- adjusted_f[,c(17,1:16)]
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+write.csv(adjusted_f, file = "Adjusted_rates_Chest_xray_f.csv")
+
+#Adjusted male
+adjusted_m <- crude_rate_m[,2:ncol(crude_rate_m)] * weightM_all$V1
+adjusted_m$age <- crude_rate_m$age
+adjusted_m <- adjusted_m[,c(17,1:16)]
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+write.csv(adjusted_m, file = "Adjusted_rates_Chest_xray_m.csv")
+
+#Total tests (adjusted) per year (both genders combined) *Note: reproducing above dF without first column (age intervals) to enable sum
+adjusted_f <- crude_rate_f[,2:ncol(crude_rate_f)] * weightF_all$V1
+adjusted_m <- crude_rate_m[,2:ncol(crude_rate_m)] * weightM_all$V1
+Total_1 <- matrix(nrow=16, ncol=1)
+
+
+for (i in 1:ncol(adjusted_m)) {
+  Total <- sum(adjusted_m[,i]) + sum(adjusted_f[,i])
+  print(Total)
+  Total_1[i,] <- Total
+}
+
+Total_1 <- as.data.frame(Total_1)
+Total_1$year <- years
+Total_1 <- Total_1[,c(2,1)]
+
+write.csv(Total_1, file = "Adjusted_rates_Chest_xray_per_year.csv")
+
+
+###############################################################################################################################################################################################################
+###################################################-------------------4. Standard errors-------------------############################################################################################################
+###############################################################################################################################################################################################################
+##1.1 Read in test data (numerator)
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+
+male_test <- read.csv("Chest_xray_numerator_gender_1.csv")
+female_test <- read.csv("Chest_xray_numerator_gender_2.csv")
+
+##1.2 Read in person years data for each gender (denominator)
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Person Years.RDS/Person years New ages")
+
+PY_m <-read.csv("person_years_new_age_gender_1.csv")
+PY_f <-read.csv("person_years_new_age_gender_2.csv")
+
+##1.3 Read in 2015 UK Standard population data
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data/UK 2015 pop estimates")
+
+standard <- read.csv("2015_UK_pop_standard.csv")
+
+#Clean dataframe
+standard$Male <- gsub(',', '', standard$Male)
+standard$Female <- gsub(',', '', standard$Female)
+standard$Male <- as.numeric(standard$Male)
+standard$Female <- as.numeric(standard$Female)
+Total_2015_pop <- sum(standard$Male)+sum(standard$Female)
+
+#Make Standard population new age cuts
+standard <- standard[,2:3]
+standard[20,] <- standard[2,] + standard[3,] #5-14
+standard[21,] <- standard[4,] + standard[5,] #15-24
+standard[22,] <- standard[6,] + standard[7,] + standard[8,] + standard[9,] #25-44
+standard[23,] <- standard[10,] + standard[11,] + standard[12,] + standard[13,] #45-64
+standard[24,] <- standard[14,] + standard[15,] #65-74
+standard[25,] <- standard[16,] + standard[17,] #75-84
+standard[26,] <- standard[18,] + standard[19,] #85+
+
+standard <- as.data.frame(standard[c(1,20:26),])
+breaknames_new <- c("0-4", "5-14", "15-24", "25-44", "45-64", "65-74", "75-84", "85+")
+
+standard$age_groups <- breaknames_new
+standard <- standard[,c(3,1:2)]
+
+###################################################-------------------1. (crude rate)^2/respective number of tests-------------------############################################################################################################
+##Read in crude rates##
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+crude_rate_f <- read.csv("Chest_X_ray_crude_rate_f.csv")
+crude_rate_m <- read.csv("Chest_x_ray_crude_rate_m.csv")
+
+##Crude rate squared##
+crude_rate_f_sqrd <- (crude_rate_f[,3:ncol(crude_rate_f)])^2
+crude_rate_m_sqrd <- (crude_rate_m[,3:ncol(crude_rate_m)])^2
+
+##Crude rate squared/respective number of tests## 
+Variance_cr_f <- crude_rate_f_sqrd/(female_test[,2:ncol(female_test)])
+Variance_cr_m <- crude_rate_m_sqrd/(male_test[,2:ncol(male_test)])
+
+##Create weight of standard population##
+weight_standard <- standard[,2:3]/Total_2015_pop
+
+##Weighted variance##
+#Example for loop 
+weighted_variance2000m <- ((weight_standard$Male)^2)*Variance_cr_m$X2000
+weighted_variance2000m_sum <- sum(weighted_variance2000m)
+
+weighted_variance2000f <- ((weight_standard$Female)^2)*Variance_cr_f$X2000
+weighted_variance2000f_sum <- sum(weighted_variance2000f)
+
+weighted_variance_2000 <- weighted_variance2000m_sum + weighted_variance2000f_sum
+weighted_variance_2000_1 <- weighted_variance2000m + weighted_variance2000f
+weighted_variance_2000_1_sum <- sum(weighted_variance_2000_1)
+
+SE_2000 <- sqrt(weighted_variance_2000)
+
+#Loop
+weighted_variancem_matrix <- matrix(nrow=nrow(Variance_cr_m), ncol=ncol(Variance_cr_m))
+
+for (i in 1:ncol(Variance_cr_m)) {
+  weighted_variancem <- ((weight_standard$Male)^2)*Variance_cr_m[,i]
+  print(weighted_variancem)
+  weighted_variancem_matrix[,i] <- weighted_variancem  
+}
+
+
+weighted_variancef_matrix <- matrix(nrow=nrow(Variance_cr_f), ncol=ncol(Variance_cr_f))
+
+for (i in 1:ncol(Variance_cr_f)) {
+  weighted_variancef <- ((weight_standard$Female)^2)*Variance_cr_f[,i]
+  print(weighted_variancef)
+  weighted_variancef_matrix[,i] <- weighted_variancef  
+}
+
+##Sum variance to calculate one variance per year##
+weighted_variance_combined <- as.data.frame(weighted_variancem_matrix + weighted_variancef_matrix)
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+write.csv(weighted_variance_combined, file = "Weighted_variance_chest_xray_both_genders.csv")
+
+#Example for loop
+variance_2000 <- sum(weighted_variance_combined$V1)
+
+variance_per_year<-matrix(nrow = 1, ncol = 16)
+
+for (i in 1:ncol(weighted_variance_combined)) {
+  variance_year <- sum(weighted_variance_combined[,i])
+  print(variance_year)
+  variance_per_year[,i] <- variance_year 
+}
+
+years <- seq(2000,2015)
+colnames(variance_per_year) <- years
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+write.csv(variance_per_year, file = "variance_chest_xray_per_year.csv")
+
+##SE##
+variance_per_year <- as.data.frame(variance_per_year)
+SE_per_year1 <- sqrt(variance_per_year)
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray")
+write.csv(SE_per_year1, file = "SE_per_year_chest xray.csv")
+
+##Files for Joinpoint##
+
+SE_per_year1 <- t(SE_per_year1)
+SE_per_year1 <- as.data.frame(SE_per_year1)
+
+#Note: Need to run: Step 3 Age and sex adjusted rates to get Total_1
+Total_1$SE <- SE_per_year1$V1
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray/CSVs for joinpoint")
+write.csv(Total_1, file = "chest_xray.csv")
+
+#calculating confidence intervals for adjusted rates
+Total_1$LL95 <- Total_1$V1-(1.96*Total_1$SE)
+Total_1$UL95 <- Total_1$V1+(1.96*Total_1$SE)
+
+setwd("H:/DPhil/Chapters/5. CPRD Factors associated with appropriate and inappropriate UK testing/Post ISAC approval/Data_Final_Oct/Chest x-ray/Files for Dec Meeting")
+write.csv(Total_1, file = "Adjusted_rates_chest_xray_with_CI.csv")
